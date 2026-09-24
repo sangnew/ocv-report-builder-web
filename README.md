@@ -3,9 +3,9 @@
 https://sangnew.github.io/ocv-report-builder-web/
 
 Turns the **Mass Production E&L Grade OCV Tracking Sheet** workbook into the Frozen IR / Spot report
-(the `test1.xlsx` layout: LOT, Cell ID, Grade, dOCV, Frozen IR, voltage drop, spot details, sizes, AZS, DNC).
+(the `test1.xlsx` layout: LOT, Cell ID, Grade, dOCV, Frozen IR, voltage drop, spot details, sizes).
 
-Anyone with the link can use it. Files are read in the browser and are never uploaded.
+The workbook is read in the browser (never uploaded). After signing in with the team password, the built report and every value typed into it are shared with the whole team in real time (Firebase, same team account as the other tracker sites).
 
 ## How it works
 
@@ -13,12 +13,12 @@ Anyone with the link can use it. Files are read in the browser and are never upl
 2. Pick LOTs. By default only cells that have their own OCV tracking sheet are included, which matches the sample report.
 3. Review the table:
    - **Yellow**: needs manual input. Shape, Location and the sizes are never in the workbook. Other columns are yellow when the Master row is empty.
-   - **Light blue**: taken from the cell's own tracking sheet (dropped layer `R6`, max dOCV `S6`) because the Master row was empty. Please verify these.
-   - **Green**: typed by you, or copied from a previous report.
+   - **Light blue**: the tracking-sheet analysis disagrees with Master E & L. Please verify these.
+   - **Green**: typed by the team, or copied from a previous report.
 4. Download the Excel file. Highlights are kept in the file, and a `Legend` sheet explains them.
 
 Optionally, load a previous report in the same format to carry over hand-entered values by Cell ID.
-Values you type are remembered in the browser (per Cell ID) until you use **Reset → Also forget the values I typed**.
+Typed values are saved per Cell ID for the whole team, so they survive rebuilding the report. **Reset** can unload the workbook from your page only, or (after typing RESET) delete the shared report and all typed values for everyone.
 
 ## Column rules
 
@@ -27,13 +27,13 @@ Values you type are remembered in the browser (per Cell ID) until you use **Rese
 | LOT, Cell ID, Grade, dOCV | Master: Lot ID, Cell ID, Grade, dOCV (mV) |
 | Frozen IR Result (35MOhm) | Master: Frozen IR (Mohm) |
 | Frozen IR Pass/Fail | Master: Frozen IR Result; if empty, NG when Frozen IR < 35 MΩ, otherwise OK |
-| voltage drop / no drop | "NTF" if Master NTF column is NTF; "Drop" if Anode Sheet / Voltage Drop is filled; otherwise the tracking sheet's R6 |
-| Voltage Dropped Layer | Master: Anode Sheet (else tracking sheet R6) |
-| dOCV (V) | Master: Voltage Drop (V) (else tracking sheet S6) |
+| voltage drop / no drop | From the cell's OCV tracking sheet: per layer (column B), dOCV = max(C−D, C−E) over the tracking dates in row 5. Drop when one inner layer is > 2.6σ above the others (same as the sheet's R6 formula) **and** ≥ 1.5 mV (adjustable); otherwise NTF. Light blue when this disagrees with Master E & L. Without a tracking sheet: Master E & L. |
+| Voltage Dropped Layer | Layer number (column B) of that layer |
+| dOCV (V) | Master: Voltage Drop (V) when it is for the same layer, else the computed dOCV (4 decimals) |
 | Spot Found | "Spot Found" when Master: Burn mark/Pinhole/None is filled |
 | Top/ Back, x, y | Master: Anode Top/Back, X (mm), Y (mm) |
 | SEM/EDS Analysis | Master: EDS Impurity Results, else the element in the NTF column (Cu, Ni, Fe, …) |
-| Shape, Location, Long side, Short side, Height, AZS, DNC | Manual |
+| Shape, Location, Long side, Short side, Height | Manual |
 
 ## Files
 

@@ -3,7 +3,7 @@
 (function (root) {
   'use strict';
 
-  // Output columns, in the exact order and wording of the report template (test1.xlsx).
+  // Output columns, in the order and wording of the report template (test1.xlsx).
   var COLUMNS = [
     { key: 'lot', label: 'LOT' },
     { key: 'cellId', label: 'Cell ID' },
@@ -24,16 +24,19 @@
     { key: 'longSide', label: 'Long side' },
     { key: 'shortSide', label: 'Short side' },
     { key: 'height', label: 'Height' },
-    { key: 'azs', label: 'AZS', optional: true },
-    { key: 'dnc', label: 'DNC', optional: true },
   ];
   // Columns that never exist in the source workbook: always typed by hand.
-  var MANUAL_ONLY = ['shape', 'location', 'longSide', 'shortSide', 'height', 'azs', 'dnc'];
+  var MANUAL_ONLY = ['shape', 'location', 'longSide', 'shortSide', 'height'];
   var FROZEN_IR_LIMIT_MOHM = 35;
+  // Same outlier rule as the tracking sheet's R6 formula: a layer is the dropped layer when its
+  // dOCV is more than 2.6 standard deviations above the average of the inner layers.
+  var SIGMA_LIMIT = 2.6;
+  var DEFAULT_MIN_DROP_V = 0.0015;
 
   function norm(s) { return String(s == null ? '' : s).toLowerCase().replace(/[\s\r\n]+/g, ''); }
   function text(v) { return String(v == null ? '' : v).trim(); }
-  function isNum(s) { return s !== '' && !isNaN(Number(s)); }
+  function isNum(s) { return s !== '' && s !== null && s !== undefined && !isNaN(Number(s)); }
+  function num(v) { return isNum(v) ? Number(v) : null; }
 
   // Header names in the "Master E & L" sheet (matched loosely so moved columns still work).
   var MASTER_HEADERS = {
@@ -73,7 +76,7 @@
 
   function lotSortKey(lot) {
     var m = /^([A-Za-z]+)0*(\d+)/.exec(lot);
-    return m ? m[1].toUpperCase() + String(m[2]).padStart(4, '0') : lot.toUpperCase();
+    return m ? m[1].toUpperCase() + String(m[2]).padStart(4, '0') : String(lot).toUpperCase();
   }
   // "FH9" -> "FH09" (used for the report's sheet name, e.g. "260921 FH09~FH14")
   function padLot(lot) {
@@ -90,15 +93,12 @@
     var sheetSet = {};
     (sheetNames || []).forEach(function (n) { sheetSet[text(n).toUpperCase()] = n; });
     var cells = [];
-    var seen = {};
     for (var r = det.headerRow + 1; r < rows.length; r++) {
       var row = rows[r] || [];
       var id = text(row[c.cellId]);
       if (!id) continue;
-      var key = id.toUpperCase();
-      var rec = { row: r + 1, trackingSheet: sheetSet[key] || null, duplicate: !!seen[key] };
+      var rec = { row: r + 1, trackingSheet: sheetSet[id.toUpperCase()] || null };
       Object.keys(c).forEach(function (f) { rec[f] = text(row[c[f]]); });
-      seen[key] = true;
       cells.push(rec);
     }
     return { cells: cells, missingHeaders: missingHeaders };
@@ -116,22 +116,48 @@
       .sort(function (a, b) { return lotSortKey(a.lot).localeCompare(lotSortKey(b.lot)); });
   }
 
-  // The OCV tracking sheet of one cell: R6 = dropped layer number (or "NTF"), S6 = max dOCV.
-  function readTrackingSheet(ws) {
-    if (!ws) return null;
-    function get(addr) {
-      var rowsArr = ws['!data'] || (Array.isArray(ws) ? ws : null); // dense mode (newer / older SheetJS)
+  function sheetGetter(ws) {
+    var rowsArr = ws['!data'] || (Array.isArray(ws) ? ws : null); // dense mode (newer / older SheetJS)
+    return function (col, row) {
       if (rowsArr) {
-        var m = /^([A-Z]+)(\d+)$/.exec(addr);
-        var col = 0;
-        for (var i = 0; i < m[1].length; i++) col = col * 26 + (m[1].charCodeAt(i) - 64);
-        var rowArr = rowsArr[Number(m[2]) - 1];
-        var cell = rowArr && rowArr[col - 1];
+        var ci = 0;
+        for (var i = 0; i < col.length; i++) ci = ci * 26 + (col.charCodeAt(i) - 64);
+        var r = rowsArr[row - 1];
+        var cell = r && r[ci - 1];
         return cell ? cell.v : undefined;
       }
-      return ws[addr] ? ws[addr].v : undefined;
+      var c = ws[col + row];
+      return c ? c.v : undefined;
+    };
+  }
+
+  // Analyze one cell's OCV tracking sheet from the raw readings.
+  // Layout: row 5 = tracking dates in C/D/E, rows 6.. = one anode layer per row (layer number in B,
+  // OCV readings per date in C/D/E). Per layer: dOCV = max(C-D, C-E). The dropped layer is the one
+  // whose dOCV stands out (> 2.6σ over the inner layers, like the sheet's R6 formula).
+  function analyzeTrackingSheet(ws) {
+    if (!ws) return null;
+    var g = sheetGetter(ws);
+    var layers = [];
+    for (var r = 6; r <= 200; r++) {
+      var b = text(g('B', r));
+      if (!b) break;
+      var c = num(g('C', r)), d = num(g('D', r)), e = num(g('E', r));
+      if (c === null || (d === null && e === null)) { layers.push({ layer: b, docv: null }); continue; }
+      var d1 = d === null ? 0 : c - d;
+      var d2 = e === null ? 0 : c - e;
+      layers.push({ layer: b, docv: Math.max(d1, d2) });
     }
-    return { layer: get('R6'), maxDocv: get('S6') };
+    var days = ['C', 'D', 'E'].filter(function (col) { return text(g(col, 5)); }).length;
+    // Statistics over the inner layers (the sheet uses rows 7..41 of 6..42: first and last layer excluded)
+    var inner = layers.slice(1, -1).filter(function (l) { return l.docv !== null; });
+    if (inner.length < 3) return { ok: false, days: days, reason: 'Not enough OCV readings in the tracking sheet' };
+    var mean = inner.reduce(function (s, l) { return s + l.docv; }, 0) / inner.length;
+    var sd = Math.sqrt(inner.reduce(function (s, l) { return s + (l.docv - mean) * (l.docv - mean); }, 0) / (inner.length - 1));
+    var best = inner[0];
+    inner.forEach(function (l) { if (l.docv > best.docv) best = l; });
+    var sigma = sd > 0 ? (best.docv - mean) / sd : 0;
+    return { ok: true, days: days, layer: best.layer, docv: best.docv, sigma: sigma };
   }
 
   function fmtDocv(v) {
@@ -156,12 +182,18 @@
     return req;
   }
 
-  // Build one report row. Each field gets { value, source }:
-  //   source: 'master' (copied from Master E & L), 'calc' (derived / from tracking sheet — verify),
-  //           'empty' (nothing found)
-  function buildRow(cell, tracking) {
+  // Build one report row. Each field gets { value, source, note }:
+  //   source: 'master'  copied from Master E & L
+  //           'sheet'   from the cell's OCV tracking sheet analysis
+  //           'calc'    tracking sheet analysis disagrees with Master E & L — verify
+  //           'empty'   nothing found
+  function buildRow(cell, analysis, opts) {
+    var minDrop = opts && isNum(opts.minDropV) ? Number(opts.minDropV) : DEFAULT_MIN_DROP_V;
     var f = {};
-    function set(key, value, source) { f[key] = { value: text(value), source: text(value) ? source : 'empty' }; }
+    function set(key, value, source, note) {
+      f[key] = { value: text(value), source: text(value) ? source : 'empty' };
+      if (note) f[key].note = note;
+    }
 
     set('lot', cell.lot, 'master');
     set('cellId', cell.cellId, 'master');
@@ -174,21 +206,35 @@
     else if (isNum(text(cell.frozenIr))) set('frozenPf', Number(cell.frozenIr) < FROZEN_IR_LIMIT_MOHM ? 'NG' : 'OK', 'master'); // fixed 35 MΩ rule from the column header
     else set('frozenPf', '', 'empty');
 
-    var hasDropData = !!(text(cell.anodeSheet) || text(cell.voltageDrop));
-    var trackLayer = tracking ? text(tracking.layer) : '';
-    if (text(cell.ntf).toUpperCase() === 'NTF') set('voltageDrop', 'NTF', 'master');
-    else if (hasDropData) set('voltageDrop', 'Drop', 'master');
-    else if (trackLayer.toUpperCase() === 'NTF') set('voltageDrop', 'NTF', 'calc');
-    else if (isNum(trackLayer)) set('voltageDrop', 'Drop', 'calc');
-    else set('voltageDrop', '', 'empty');
+    // What the Master sheet says about the voltage drop (if anything)
+    var masterVd = text(cell.ntf).toUpperCase() === 'NTF' ? 'NTF'
+      : (text(cell.anodeSheet) || text(cell.voltageDrop)) ? 'Drop' : '';
+    var masterLayer = text(cell.anodeSheet);
 
-    if (text(cell.anodeSheet)) set('layer', cell.anodeSheet, 'master');
-    else if (isNum(trackLayer) && f.voltageDrop.value === 'Drop') set('layer', trackLayer, 'calc');
-    else set('layer', '', 'empty');
-
-    if (text(cell.voltageDrop)) set('docvV', cell.voltageDrop, 'master');
-    else if (tracking && f.voltageDrop.value === 'Drop') set('docvV', fmtDocv(tracking.maxDocv), 'calc');
-    else set('docvV', '', 'empty');
+    if (analysis && analysis.ok) {
+      var isDrop = analysis.sigma > SIGMA_LIMIT && analysis.docv >= minDrop;
+      var vd = isDrop ? 'Drop' : 'NTF';
+      var detail = 'Tracking sheet: max dOCV ' + (analysis.docv * 1000).toFixed(2) + ' mV at layer ' + analysis.layer +
+        ' (' + analysis.sigma.toFixed(1) + 'σ)';
+      var conflict = masterVd && (masterVd !== vd || (isDrop && masterLayer && masterLayer !== String(analysis.layer)));
+      var masterNote = masterVd ? ' · Master E & L: ' + masterVd + (masterLayer ? ' layer ' + masterLayer : '') : '';
+      var src = conflict ? 'calc' : 'sheet';
+      set('voltageDrop', vd, src, detail + masterNote);
+      if (isDrop) {
+        set('layer', analysis.layer, src, detail + masterNote);
+        // Prefer the Master's rounded value when it describes the same layer
+        if (text(cell.voltageDrop) && masterLayer === String(analysis.layer)) set('docvV', cell.voltageDrop, 'master');
+        else set('docvV', fmtDocv(analysis.docv), src, detail + masterNote);
+      } else {
+        set('layer', '', 'empty');
+        set('docvV', '', 'empty');
+      }
+    } else {
+      // No usable tracking sheet: fall back to the Master sheet
+      set('voltageDrop', masterVd, 'master', analysis && analysis.reason);
+      set('layer', masterVd === 'Drop' ? masterLayer : '', 'master');
+      set('docvV', masterVd === 'Drop' ? cell.voltageDrop : '', 'master');
+    }
 
     var burn = text(cell.burnMark);
     set('spot', burn && burn.toLowerCase() !== 'none' ? 'Spot Found' : '', 'master');
@@ -205,9 +251,6 @@
     MANUAL_ONLY.forEach(function (k) { set(k, '', 'empty'); });
     return f;
   }
-
-  // Report header row as it appears in the template.
-  function headerRow() { return COLUMNS.map(function (c) { return c.label; }); }
 
   // Map a previous report's header labels to column keys.
   function detectReportColumns(rows) {
@@ -240,15 +283,16 @@
   var api = {
     COLUMNS: COLUMNS,
     MANUAL_ONLY: MANUAL_ONLY,
+    SIGMA_LIMIT: SIGMA_LIMIT,
+    DEFAULT_MIN_DROP_V: DEFAULT_MIN_DROP_V,
     detectMasterColumns: detectMasterColumns,
     parseMaster: parseMaster,
     lotSummary: lotSummary,
     lotSortKey: lotSortKey,
     padLot: padLot,
-    readTrackingSheet: readTrackingSheet,
+    analyzeTrackingSheet: analyzeTrackingSheet,
     buildRow: buildRow,
     requiredKeys: requiredKeys,
-    headerRow: headerRow,
     parsePreviousReport: parsePreviousReport,
     isNum: isNum,
   };

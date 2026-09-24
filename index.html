@@ -4,22 +4,30 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>OCV Report Builder</title>
-<link rel="stylesheet" href="styles.css?v=2" />
+<link rel="stylesheet" href="styles.css?v=4" />
 <script src="https://cdn.jsdelivr.net/npm/xlsx-js-style@1.2.0/dist/xlsx.bundle.js"></script>
-<script src="convert.js?v=3"></script>
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore-compat.js"></script>
+<script src="firebase-config.js?v=1"></script>
+<script src="convert.js?v=4"></script>
 </head>
 <body>
 <header class="app-header">
   <div>
     <h1>OCV Report Builder</h1>
-    <p class="sub">Turns the <b>Mass Production E&amp;L Grade OCV Tracking Sheet</b> into the Frozen IR / Spot report. Files are processed in your browser and are never uploaded.</p>
+    <p class="sub">Turns the <b>Mass Production E&amp;L Grade OCV Tracking Sheet</b> into the Frozen IR / Spot report. The workbook is read in your browser; the report and the values you type are shared with the team.</p>
   </div>
-  <button class="btn btn-danger" id="resetBtn" type="button">Reset</button>
+  <div class="header-actions">
+    <span class="live-badge connecting" id="liveBadge"><span class="dot"></span><span id="liveBadgeText">Loading</span></span>
+    <button class="btn btn-ghost" id="signOutBtn" type="button" hidden>Sign out</button>
+    <button class="btn btn-danger" id="resetBtn" type="button">Reset</button>
+  </div>
 </header>
 
 <main>
   <section class="card step" id="step1">
-    <div class="step-head"><span class="step-num">1</span><h2>Load the OCV tracking workbook</h2></div>
+    <div class="step-head"><span class="step-num">1</span><h2>Load the OCV tracking workbook</h2><span class="step-note" id="step1Note"></span></div>
     <label class="dropzone" id="sourceDrop">
       <input type="file" id="sourceInput" accept=".xlsx,.xlsm,.xls" hidden />
       <span class="drop-main">Drop the <b>.xlsx</b> file here, or click to choose</span>
@@ -32,12 +40,17 @@
     <div class="step-head"><span class="step-num">2</span><h2>Choose LOTs</h2></div>
     <div class="lot-actions">
       <button class="btn btn-ghost small" id="lotsNoneBtn" type="button">Clear</button>
-      <label class="check"><input type="checkbox" id="onlyWithSheet" checked /> Only cells that have their own OCV tracking sheet (matches the sample report)</label>
+      <label class="check"><input type="checkbox" id="onlyWithSheet" checked /> Only cells that have their own OCV tracking sheet</label>
     </div>
     <div class="lot-grid" id="lotGrid"></div>
+    <div class="setting">
+      <label class="field">Drop = a layer more than 2.6σ above the others <b>and</b> at least
+        <input type="number" id="minDropInput" min="0" step="0.1" value="1.5" /> mV</label>
+      <p class="hint">Voltage drop is analyzed from each cell's tracking sheet: per layer (column B), dOCV = the biggest fall between the tracking dates in C, D and E. The 2.6σ test is the same as the sheet's R6 formula; the mV minimum filters out tiny drops that the formula alone would flag.</p>
+    </div>
     <details class="prev-report">
       <summary>Optional: carry over values from a previous report</summary>
-      <p class="hint">Load an earlier report in the same format (like <i>test1.xlsx</i>). Values that are not in the tracking workbook — Shape, Location, sizes, and anything else you typed — are copied over by Cell ID.</p>
+      <p class="hint">Load an earlier report in the same format (like <i>test1.xlsx</i>). Values that are not in the tracking workbook — Shape, Location, sizes — are copied over by Cell ID.</p>
       <label class="btn btn-secondary small file-btn">Choose previous report<input type="file" id="prevInput" accept=".xlsx,.xls" hidden /></label>
       <span class="status inline" id="prevStatus"></span>
     </details>
@@ -49,11 +62,12 @@
 
   <section class="card step" id="step3" hidden>
     <div class="step-head"><span class="step-num">3</span><h2>Review, fill in highlighted cells, and download</h2></div>
+    <p class="report-meta" id="reportMeta"></p>
     <div class="legend">
       <span class="chip chip-missing">Needs manual input</span>
-      <span class="chip chip-calc">From the cell's tracking sheet — please verify</span>
-      <span class="chip chip-entered">Entered by you / previous report</span>
-      <span class="chip">From the tracking workbook</span>
+      <span class="chip chip-calc">Tracking sheet and Master disagree — please verify</span>
+      <span class="chip chip-entered">Entered by the team / previous report</span>
+      <span class="chip">From the workbook</span>
     </div>
     <div class="summary-row">
       <span id="summaryText"></span>
@@ -65,7 +79,7 @@
         <tbody id="reportBody"></tbody>
       </table>
     </div>
-    <p class="hint">Rows with "Drop" need spot details. Long side / Short side / Height are needed when Location is "Coating Inside". Uncheck a row to leave it out of the download. What you type is remembered in this browser by Cell ID.</p>
+    <p class="hint">Rows with "Drop" need spot details. Long side / Short side / Height are needed when Location is "Coating Inside". Uncheck a row to leave it out of the download. Hover a cell to see where its value came from. Everything you type is saved for the whole team.</p>
     <div class="download-row">
       <label class="field">Sheet name <input type="text" id="sheetNameInput" maxlength="31" /></label>
       <button class="btn btn-primary" id="downloadBtn" type="button">Download Excel</button>
@@ -73,12 +87,30 @@
   </section>
 </main>
 
+<!-- Team sign-in -->
+<div class="modal-overlay" id="loginOverlay">
+  <form class="modal" id="loginForm">
+    <h2>Team sign-in</h2>
+    <p>Enter the team password to see and edit the shared report. This browser stays signed in until you sign out.</p>
+    <input type="password" class="modal-input" id="loginPassword" autocomplete="current-password" placeholder="Team password" />
+    <div class="modal-error" id="loginError"></div>
+    <div class="modal-actions">
+      <button class="btn btn-primary" id="loginBtn" type="submit">Sign in</button>
+    </div>
+  </form>
+</div>
+
 <!-- Reset -->
 <div class="modal-overlay" id="resetOverlay">
   <div class="modal">
     <h2>Reset</h2>
-    <p>This clears the loaded files and the report on this page.</p>
-    <label class="check"><input type="checkbox" id="resetManual" /> Also forget the values I typed (saved in this browser)</label>
+    <label class="reset-option"><input type="radio" name="resetScope" value="page" checked /> Unload the workbook on this page only (the shared report stays)</label>
+    <label class="reset-option"><input type="radio" name="resetScope" value="all" /> <span id="resetAllLabel">Delete the shared report and every value the team typed</span></label>
+    <div id="resetAllConfirm" hidden>
+      <p class="modal-warn">This cannot be undone. Download the Excel file first if you may need it.</p>
+      <label class="modal-label" for="resetConfirmInput">Type <b>RESET</b> to confirm</label>
+      <input type="text" class="modal-input" id="resetConfirmInput" autocomplete="off" placeholder="RESET" />
+    </div>
     <div class="modal-actions">
       <button class="btn btn-ghost" id="resetCancelBtn" type="button">Cancel</button>
       <button class="btn btn-danger" id="resetConfirmBtn" type="button">Reset</button>
@@ -89,6 +121,6 @@
 <div class="busy" id="busy" hidden><div class="busy-box"><div class="spinner"></div><span id="busyText">Working…</span></div></div>
 <div class="toast" id="toast"></div>
 
-<script src="app.js?v=3"></script>
+<script src="app.js?v=4"></script>
 </body>
 </html>

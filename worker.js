@@ -3,10 +3,10 @@ importScripts(
   'https://cdn.jsdelivr.net/npm/xlsx-js-style@1.2.0/dist/xlsx.bundle.js',
   'https://cdn.jsdelivr.net/npm/fflate@0.8.2/umd/index.js',
   'xlsx-subset.js?v=1',
-  'convert.js?v=3'
+  'convert.js?v=4'
 );
 
-var source = null; // XlsxSubset workbook handle
+var source = null; // { handle (XlsxSubset workbook or null), data, names }
 
 function findMasterSheet(names) {
   var norm = function (s) { return String(s).toLowerCase().replace(/[^a-z]/g, ''); };
@@ -15,9 +15,9 @@ function findMasterSheet(names) {
 }
 
 // Open with the fast partial reader; fall back to a full SheetJS parse for unusual files (e.g. .xls)
-function readSheets(handle, rawBuf, names, opts) {
-  if (handle) return XLSX.read(handle.open(names), Object.assign({ type: 'array', sheets: names }, opts));
-  return XLSX.read(rawBuf, Object.assign({ type: 'array', sheets: names }, opts));
+function readSheets(names, opts) {
+  var input = source.handle ? source.handle.open(names) : source.data;
+  return XLSX.read(input, Object.assign({ type: 'array', sheets: names }, opts));
 }
 
 self.onmessage = function (e) {
@@ -30,12 +30,11 @@ self.onmessage = function (e) {
         handle = XlsxSubset.openWorkbook(fflate, data);
         names = handle.names;
       } catch (zipErr) {
-        handle = null;
         names = XLSX.read(data, { type: 'array', bookSheets: true }).SheetNames;
       }
       source = { handle: handle, data: data, names: names };
       var masterName = findMasterSheet(names);
-      var wb = readSheets(handle, data, [masterName], { dense: true });
+      var wb = readSheets([masterName], { dense: true });
       var rows = XLSX.utils.sheet_to_json(wb.Sheets[masterName], { header: 1, raw: false, defval: '' });
       var parsed = OcvConvert.parseMaster(rows, names);
       self.postMessage({
@@ -45,10 +44,10 @@ self.onmessage = function (e) {
     } else if (msg.type === 'tracking') {
       var result = {};
       if (msg.sheets.length) {
-        var twb = readSheets(source.handle, source.data, msg.sheets, { dense: true, sheetRows: 7 });
-        msg.sheets.forEach(function (name) { result[name] = OcvConvert.readTrackingSheet(twb.Sheets[name]); });
+        var twb = readSheets(msg.sheets, { dense: true, sheetRows: 60 });
+        msg.sheets.forEach(function (name) { result[name] = OcvConvert.analyzeTrackingSheet(twb.Sheets[name]); });
       }
-      self.postMessage({ id: msg.id, ok: true, tracking: result });
+      self.postMessage({ id: msg.id, ok: true, analysis: result });
     } else if (msg.type === 'report') {
       var rwb = XLSX.read(new Uint8Array(msg.buf), { type: 'array' });
       var found = null, sheetName = null;
