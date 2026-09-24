@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>OCV Report Builder</title>
+<link rel="stylesheet" href="styles.css?v=2" />
+<script src="https://cdn.jsdelivr.net/npm/xlsx-js-style@1.2.0/dist/xlsx.bundle.js"></script>
+<script src="convert.js?v=3"></script>
+</head>
+<body>
+<header class="app-header">
+  <div>
+    <h1>OCV Report Builder</h1>
+    <p class="sub">Turns the <b>Mass Production E&amp;L Grade OCV Tracking Sheet</b> into the Frozen IR / Spot report. Files are processed in your browser and are never uploaded.</p>
+  </div>
+  <button class="btn btn-danger" id="resetBtn" type="button">Reset</button>
+</header>
+
+<main>
+  <section class="card step" id="step1">
+    <div class="step-head"><span class="step-num">1</span><h2>Load the OCV tracking workbook</h2></div>
+    <label class="dropzone" id="sourceDrop">
+      <input type="file" id="sourceInput" accept=".xlsx,.xlsm,.xls" hidden />
+      <span class="drop-main">Drop the <b>.xlsx</b> file here, or click to choose</span>
+      <span class="drop-sub">e.g. "Mass Production E&amp;L Grade OCV Tracking Sheet_V5 FH01~FH31.xlsx"</span>
+    </label>
+    <div class="status" id="sourceStatus" hidden></div>
+  </section>
+
+  <section class="card step" id="step2" hidden>
+    <div class="step-head"><span class="step-num">2</span><h2>Choose LOTs</h2></div>
+    <div class="lot-actions">
+      <button class="btn btn-ghost small" id="lotsNoneBtn" type="button">Clear</button>
+      <label class="check"><input type="checkbox" id="onlyWithSheet" checked /> Only cells that have their own OCV tracking sheet (matches the sample report)</label>
+    </div>
+    <div class="lot-grid" id="lotGrid"></div>
+    <details class="prev-report">
+      <summary>Optional: carry over values from a previous report</summary>
+      <p class="hint">Load an earlier report in the same format (like <i>test1.xlsx</i>). Values that are not in the tracking workbook — Shape, Location, sizes, and anything else you typed — are copied over by Cell ID.</p>
+      <label class="btn btn-secondary small file-btn">Choose previous report<input type="file" id="prevInput" accept=".xlsx,.xls" hidden /></label>
+      <span class="status inline" id="prevStatus"></span>
+    </details>
+    <div class="build-row">
+      <button class="btn btn-primary" id="buildBtn" type="button" disabled>Build report</button>
+      <span class="hint" id="selectionHint"></span>
+    </div>
+  </section>
+
+  <section class="card step" id="step3" hidden>
+    <div class="step-head"><span class="step-num">3</span><h2>Review, fill in highlighted cells, and download</h2></div>
+    <div class="legend">
+      <span class="chip chip-missing">Needs manual input</span>
+      <span class="chip chip-calc">From the cell's tracking sheet — please verify</span>
+      <span class="chip chip-entered">Entered by you / previous report</span>
+      <span class="chip">From the tracking workbook</span>
+    </div>
+    <div class="summary-row">
+      <span id="summaryText"></span>
+      <label class="check"><input type="checkbox" id="onlyMissing" /> Show only rows that need input</label>
+    </div>
+    <div class="table-wrap">
+      <table class="report" id="reportTable">
+        <thead><tr id="reportHead"></tr></thead>
+        <tbody id="reportBody"></tbody>
+      </table>
+    </div>
+    <p class="hint">Rows with "Drop" need spot details. Long side / Short side / Height are needed when Location is "Coating Inside". Uncheck a row to leave it out of the download. What you type is remembered in this browser by Cell ID.</p>
+    <div class="download-row">
+      <label class="field">Sheet name <input type="text" id="sheetNameInput" maxlength="31" /></label>
+      <button class="btn btn-primary" id="downloadBtn" type="button">Download Excel</button>
+    </div>
+  </section>
+</main>
+
+<!-- Reset -->
+<div class="modal-overlay" id="resetOverlay">
+  <div class="modal">
+    <h2>Reset</h2>
+    <p>This clears the loaded files and the report on this page.</p>
+    <label class="check"><input type="checkbox" id="resetManual" /> Also forget the values I typed (saved in this browser)</label>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" id="resetCancelBtn" type="button">Cancel</button>
+      <button class="btn btn-danger" id="resetConfirmBtn" type="button">Reset</button>
+    </div>
+  </div>
+</div>
+
+<div class="busy" id="busy" hidden><div class="busy-box"><div class="spinner"></div><span id="busyText">Working…</span></div></div>
+<div class="toast" id="toast"></div>
+
+<script src="app.js?v=3"></script>
+</body>
+</html>
